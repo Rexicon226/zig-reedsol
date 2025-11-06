@@ -162,32 +162,30 @@ const Encoder = struct {
         e.ifft(0, chunk_size, first_count, chunk_size);
     }
 
+    fn ifft_partial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+        const lut = tables.mul128[log_m];
+
+        for (x, y) |*a, *b| {
+            var x_lo: V = @bitCast(a[0..32].*);
+            var x_hi: V = @bitCast(a[32..64].*);
+
+            var y_lo: V = @bitCast(b[0..32].*);
+            var y_hi: V = @bitCast(b[32..64].*);
+
+            y_lo ^= x_lo;
+            y_hi ^= x_hi;
+
+            b[0..32].* = @bitCast(y_lo);
+            b[32..64].* = @bitCast(y_hi);
+
+            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
+
+            a[0..32].* = @bitCast(x_lo);
+            a[32..64].* = @bitCast(x_hi);
+        }
+    }
+
     fn ifft(e: *Encoder, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
-        const S = struct {
-            fn partial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
-                const lut = tables.mul128[log_m];
-
-                for (x, y) |*a, *b| {
-                    var x_lo: V = @bitCast(a[0..32].*);
-                    var x_hi: V = @bitCast(a[32..64].*);
-
-                    var y_lo: V = @bitCast(b[0..32].*);
-                    var y_hi: V = @bitCast(b[32..64].*);
-
-                    y_lo ^= x_lo;
-                    y_hi ^= x_hi;
-
-                    b[0..32].* = @bitCast(y_lo);
-                    b[32..64].* = @bitCast(y_hi);
-
-                    x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
-
-                    a[0..32].* = @bitCast(x_lo);
-                    a[32..64].* = @bitCast(x_hi);
-                }
-            }
-        };
-
         const work = &e.work;
         const shards = &work.shards;
 
@@ -214,13 +212,13 @@ const Encoder = struct {
                     if (log_m01 == gf.modulus) {
                         xor(s1, s0);
                     } else {
-                        S.partial(s0, s1, log_m01);
+                        ifft_partial(s0, s1, log_m01);
                     }
 
                     if (log_m23 == gf.modulus) {
                         xor(s3, s2);
                     } else {
-                        S.partial(s2, s3, log_m23);
+                        ifft_partial(s2, s3, log_m23);
                     }
 
                     // second layer
@@ -228,8 +226,8 @@ const Encoder = struct {
                         xor(s2, s0);
                         xor(s3, s1);
                     } else {
-                        S.partial(s0, s2, log_m02);
-                        S.partial(s1, s3, log_m02);
+                        ifft_partial(s0, s2, log_m02);
+                        ifft_partial(s1, s3, log_m02);
                     }
                 }
             }
@@ -248,7 +246,7 @@ const Encoder = struct {
             if (log_m == gf.modulus) {
                 xor(s0, s1);
             } else {
-                S.partial(s0, s1, log_m);
+                ifft_partial(s0, s1, log_m);
             }
         }
     }
