@@ -342,6 +342,34 @@ fn useHighRate(original: u64, recovery: u64) !bool {
     };
 }
 
+test "Encoder.mulAdd256" {
+    try mulAdd256Test(@Vector(4, u64){ 506097522914230528, 1084818905618843912, 1663540288323457296, 2242261671028070680 }, @Vector(4, u64){ 2820983053732684064, 3399704436437297448, 3978425819141910832, 4557147201846524216 }, @Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, @Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, 30583, @Vector(4, u64){ 2025808526283708955, 1447087143579095571, 868365760874482187, 289644378169868803 }, @Vector(4, u64){ 434320308619640833, 1013041691324254217, 1591763074028867601, 2170484456733480985 });
+}
+
+fn mulAdd256Test(
+    x_lo: @Vector(4, u64),
+    x_hi: @Vector(4, u64),
+    y_lo: @Vector(4, u64),
+    y_hi: @Vector(4, u64),
+    table_index: usize,
+    expected_lo: @Vector(4, u64),
+    expected_hi: @Vector(4, u64),
+) !void {
+    const x_lo_res, const x_hi_res = Encoder.mulAdd256(
+        @bitCast(x_lo),
+        @bitCast(x_hi),
+        @bitCast(y_lo),
+        @bitCast(y_hi),
+        tables.mul128[table_index],
+    );
+
+    const expected_prod_lo: Encoder.V = @bitCast(expected_lo);
+    const expected_prod_hi: Encoder.V = @bitCast(expected_hi);
+
+    try std.testing.expectEqual(x_lo_res, expected_prod_lo);
+    try std.testing.expectEqual(x_hi_res, expected_prod_hi);
+}
+
 test "Encoder.mul256" {
     try mul256Test(@Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, @Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, 30583, @Vector(4, u64){ 1953184666628070171, 1953184666628070171, 1953184666628070171, 1953184666628070171 }, @Vector(4, u64){ 2387225703656530209, 2387225703656530209, 2387225703656530209, 2387225703656530209 });
 
