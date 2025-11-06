@@ -195,7 +195,7 @@ const Encoder = struct {
         var distance_4: u64 = 4;
         while (distance_4 <= size) {
             var r: u64 = 0;
-            while (r < truncated_size) {
+            while (r < truncated_size) : (r += distance_4) {
                 const base = r + distance + skew_delta - 1;
 
                 const log_m01 = tables.skew[base + distance * 0];
@@ -232,10 +232,7 @@ const Encoder = struct {
                         S.partial(s1, s3, log_m02);
                     }
                 }
-
-                r += distance_4;
             }
-
             distance = distance_4;
             distance_4 <<= 2;
         }
