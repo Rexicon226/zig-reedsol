@@ -85,8 +85,51 @@ pub fn main() !void {
     for (0..gf.modulus) |i| skew[i] = log[skew[i]];
 
     for (skew) |e| try stdout.print("{d},\n", .{e});
+
     try stdout.writeAll(
         \\};
+        \\
+        \\pub const mul128: [65536][2][4]u128 = .{
+    );
+
+    var mul128: [gf.order][2][4]u128 = @splat(@splat(@splat(0)));
+
+    for (0..gf.order) |log_m| {
+        for (0..4) |i| {
+            var prod_lo: [16]u8 = @splat(0);
+            var prod_hi: [16]u8 = @splat(0);
+            for (0..16) |j| {
+                const prod = mul(@intCast(j << (@as(u6, @intCast(i)) * 4)), @intCast(log_m), &exp, &log);
+                prod_lo[j] = @truncate(prod);
+                prod_hi[j] = @truncate(prod >> 8);
+            }
+            mul128[log_m][0][i] = std.mem.readInt(u128, &prod_lo, .little);
+            mul128[log_m][1][i] = std.mem.readInt(u128, &prod_hi, .little);
+        }
+    }
+
+    for (mul128) |lut| {
+        try stdout.writeAll(
+            \\ .{
+        );
+        for (lut) |l| {
+            try stdout.writeAll(
+                \\ .{
+            );
+            for (l) |i| {
+                try stdout.print(" {d},", .{i});
+            }
+            try stdout.writeAll(
+                \\ },
+            );
+        }
+        try stdout.writeAll(
+            \\ },
+        );
+    }
+
+    try stdout.writeAll(
+        \\ };
     );
 }
 
