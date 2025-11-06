@@ -164,8 +164,8 @@ const Encoder = struct {
 
     fn ifft(e: *Encoder, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
         const S = struct {
-            fn partial(x: [][64]u8, y: [][64]u8, log_m: u64) void {
-                _ = log_m;
+            fn partial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+                const lut = tables.mul128[log_m];
 
                 for (x, y) |*a, *b| {
                     var x_lo: V = @bitCast(a[0..32].*);
@@ -180,7 +180,7 @@ const Encoder = struct {
                     b[0..32].* = @bitCast(y_lo);
                     b[32..64].* = @bitCast(y_hi);
 
-                    x_lo, x_hi = muladd(x_lo, x_hi, y_lo, y_hi);
+                    x_lo, x_hi = muladd(x_lo, x_hi, y_lo, y_hi, lut);
 
                     a[0..32].* = @bitCast(x_lo);
                     a[32..64].* = @bitCast(x_hi);
@@ -193,7 +193,7 @@ const Encoder = struct {
 
         var distance: u64 = 1;
         var distance_4: u64 = 4;
-        while (distance <= size) {
+        while (distance_4 <= size) {
             var r: u64 = 0;
             while (r < truncated_size) {
                 const base = r + distance + skew_delta - 1;
@@ -205,10 +205,10 @@ const Encoder = struct {
                 for (r..r + distance) |i| {
                     const position = pos + i;
 
-                    const s0 = shards.data[position + (distance * 0) ..][0..shards.shard_length];
-                    const s1 = shards.data[position + (distance * 1) ..][0..shards.shard_length];
-                    const s2 = shards.data[position + (distance * 2) ..][0..shards.shard_length];
-                    const s3 = shards.data[position + (distance * 3) ..][0..shards.shard_length];
+                    const s0 = shards.data[(position + distance * 0) * shards.shard_length ..][0..shards.shard_length];
+                    const s1 = shards.data[(position + distance * 1) * shards.shard_length ..][0..shards.shard_length];
+                    const s2 = shards.data[(position + distance * 2) * shards.shard_length ..][0..shards.shard_length];
+                    const s3 = shards.data[(position + distance * 3) * shards.shard_length ..][0..shards.shard_length];
 
                     // first layer
                     if (log_m01 == gf.modulus) {
@@ -248,15 +248,18 @@ const Encoder = struct {
         }
     }
 
-    fn mul256(lo: V, hi: V) struct { V, V } {
+    const Lut = [2][4]u128;
+
+    fn mul256(lo: V, hi: V, lut: Lut) struct { V, V } {
+        _ = lut;
         _ = lo;
         _ = hi;
 
         return .{ @splat(0), @splat(0) };
     }
 
-    fn muladd(x_lo: V, x_hi: V, y_lo: V, y_hi: V) struct { V, V } {
-        const prod_lo, const prod_hi = mul256(y_lo, y_hi);
+    fn muladd(x_lo: V, x_hi: V, y_lo: V, y_hi: V, lut: Lut) struct { V, V } {
+        const prod_lo, const prod_hi = mul256(y_lo, y_hi, lut);
         return .{
             x_lo ^ prod_lo,
             x_hi ^ prod_hi,
