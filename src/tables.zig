@@ -116,9 +116,9 @@ pub fn main() !void {
             try stdout.writeAll(
                 \\ .{
             );
-            for (l) |i| {
-                try stdout.print(" {d},", .{i});
-            }
+
+            for (l) |i| try stdout.print(" {d},", .{i});
+
             try stdout.writeAll(
                 \\ },
             );
