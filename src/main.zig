@@ -173,6 +173,35 @@ const Encoder = struct {
         work.shards.zero(first_count, chunk_size);
         e.ifft(0, chunk_size, first_count, chunk_size);
 
+        if (work.original_count > chunk_size) {
+            // full chunks
+
+            var chunk_start = chunk_size;
+            while (chunk_start + chunk_size < work.original_count) : (chunk_start += chunk_size) {
+                e.ifft(chunk_start, chunk_size, chunk_size, chunk_start + chunk_size);
+                const s0 = work.shards.data[0..chunk_size];
+                const s1 = work.shards.data[chunk_start * work.shards.shard_length ..][0..chunk_size];
+                xor(s0, s1);
+            }
+
+            // final partial chunk
+
+            const last_count = work.original_count % chunk_size;
+            if (last_count > 0) {
+                work.shards.zero(chunk_start + last_count, work.shards.data.len);
+                e.ifft(chunk_start, chunk_size, last_count, chunk_start + chunk_size);
+                const s0 = work.shards.data[0..chunk_size];
+                const s1 = work.shards.data[chunk_start * work.shards.shard_length ..][0..chunk_size];
+                xor(s0, s1);
+            }
+        }
+
+        // fft
+
+        e.fft(0, chunk_size, work.recovery_count, 0);
+
+        // undo last chunks encoding
+
         work.undoLastChunkEncoding();
     }
 
@@ -222,8 +251,23 @@ const Encoder = struct {
                     }
                 }
             }
-            distance = distance_4;
-            distance_4 <<= 2;
+            distance_4 = distance;
+            distance >>= 2;
+        }
+
+        if (distance_4 == 2) {
+            var r: usize = 0;
+            while (r < truncated_size) : (r += 2) {
+                const log_m = tables.skew[r + skew_delta];
+                const s0 = shards.data[(pos + r) * shards.shard_length ..][0..shards.shard_length];
+                const s1 = shards.data[(pos + r + 1) * shards.shard_length ..][0..shards.shard_length];
+
+                if (log_m == gf.modulus) {
+                    xor(s1, s0);
+                } else {
+                    fftPartial(s0, s1, log_m);
+                }
+            }
         }
     }
 
