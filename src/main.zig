@@ -162,7 +162,58 @@ const Encoder = struct {
         e.ifft(0, chunk_size, first_count, chunk_size);
     }
 
-    fn ifftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+    fn fft(e: *Encoder, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
+        const work = &e.work;
+        const shards = &work.shards;
+
+        var distance = size >> 2;
+        var distance_4 = size;
+        while (distance != 0) {
+            var r: u64 = 0;
+            while (r < truncated_size) : (r += distance_4) {
+                const base = r + distance + skew_delta - 1;
+
+                const log_m01 = tables.skew[base + distance * 0];
+                const log_m02 = tables.skew[base + distance * 1];
+                const log_m23 = tables.skew[base + distance * 2];
+
+                for (r..r + distance) |i| {
+                    const position = pos + i;
+
+                    const s0 = shards.data[(position + distance * 0) * shards.shard_length ..][0..shards.shard_length];
+                    const s1 = shards.data[(position + distance * 1) * shards.shard_length ..][0..shards.shard_length];
+                    const s2 = shards.data[(position + distance * 2) * shards.shard_length ..][0..shards.shard_length];
+                    const s3 = shards.data[(position + distance * 3) * shards.shard_length ..][0..shards.shard_length];
+
+                    // first layer
+                    if (log_m02 == gf.modulus) {
+                        xor(s2, s0);
+                        xor(s3, s1);
+                    } else {
+                        fftPartial(s0, s2, log_m02);
+                        fftPartial(s1, s3, log_m02);
+                    }
+
+                    // second layer
+                    if (log_m01 == gf.modulus) {
+                        xor(s1, s0);
+                    } else {
+                        fftPartial(s0, s1, log_m01);
+                    }
+
+                    if (log_m23 == gf.modulus) {
+                        xor(s3, s2);
+                    } else {
+                        fftPartial(s2, s3, log_m23);
+                    }
+                }
+            }
+            distance = distance_4;
+            distance_4 <<= 2;
+        }
+    }
+
+    fn fftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
         const lut = tables.mul128[log_m];
 
         for (x, y) |*a, *b| {
@@ -172,16 +223,16 @@ const Encoder = struct {
             var y_lo: V = @bitCast(b[0..32].*);
             var y_hi: V = @bitCast(b[32..64].*);
 
+            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
+
+            a[0..32].* = @bitCast(x_lo);
+            a[32..64].* = @bitCast(x_hi);
+
             y_lo ^= x_lo;
             y_hi ^= x_hi;
 
             b[0..32].* = @bitCast(y_lo);
             b[32..64].* = @bitCast(y_hi);
-
-            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
-
-            a[0..32].* = @bitCast(x_lo);
-            a[32..64].* = @bitCast(x_hi);
         }
     }
 
@@ -252,6 +303,29 @@ const Encoder = struct {
                     ifftPartial(s0, s1, log_m);
                 }
             }
+        }
+    }
+
+    fn ifftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+        const lut = tables.mul128[log_m];
+
+        for (x, y) |*a, *b| {
+            var x_lo: V = @bitCast(a[0..32].*);
+            var x_hi: V = @bitCast(a[32..64].*);
+
+            var y_lo: V = @bitCast(b[0..32].*);
+            var y_hi: V = @bitCast(b[32..64].*);
+
+            y_lo ^= x_lo;
+            y_hi ^= x_hi;
+
+            b[0..32].* = @bitCast(y_lo);
+            b[32..64].* = @bitCast(y_hi);
+
+            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
+
+            a[0..32].* = @bitCast(x_lo);
+            a[32..64].* = @bitCast(x_hi);
         }
     }
 
