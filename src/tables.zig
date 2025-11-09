@@ -1,6 +1,7 @@
 const std = @import("std");
 const gf = @import("gf.zig");
 const utils = @import("utils.zig");
+const walsh_hadamard = @import("walsh_hadamard.zig");
 
 pub fn main() !void {
     var stdout_buffer: [0x1000]u8 = undefined;
@@ -130,6 +131,17 @@ pub fn main() !void {
             \\ },
         );
     }
+
+    try stdout.writeAll(
+        \\ };
+        \\
+        \\ pub const log_walsh: [65536]u16 = .{
+    );
+
+    var log_walsh: [gf.order]u16 = log;
+    walsh_hadamard.fwht(&log_walsh, gf.order);
+
+    for (log_walsh) |l| try stdout.print(" {d},", .{l});
 
     try stdout.writeAll(
         \\ };
