@@ -2,6 +2,8 @@ const std = @import("std");
 const tables = @import("tables");
 const gf = @import("gf.zig");
 
+const V = @Vector(32, u8);
+
 pub fn main() void {}
 
 fn encode(allocator: std.mem.Allocator, original_count: u64, recovery_count: u64, original: []const []const u8) ![]const [64]u8 {
@@ -18,8 +20,6 @@ fn encode(allocator: std.mem.Allocator, original_count: u64, recovery_count: u64
 
 const Encoder = struct {
     work: Work,
-
-    const V = @Vector(32, u8);
 
     const Work = struct {
         original_count: u64,
@@ -111,7 +111,7 @@ const Encoder = struct {
                 e.ifft(chunk_start, chunk_size, chunk_size, chunk_start + chunk_size);
                 const s0 = work.shards.data[0..chunk_size];
                 const s1 = work.shards.data[chunk_start * work.shards.shard_length ..][0..chunk_size];
-                xor(s0, s1);
+                Engine.xor(s0, s1);
             }
 
             // final partial chunk
@@ -122,7 +122,7 @@ const Encoder = struct {
                 e.ifft(chunk_start, chunk_size, last_count, chunk_start + chunk_size);
                 const s0 = work.shards.data[0..chunk_size];
                 const s1 = work.shards.data[chunk_start * work.shards.shard_length ..][0..chunk_size];
-                xor(s0, s1);
+                Engine.xor(s0, s1);
             }
         }
 
@@ -162,24 +162,24 @@ const Encoder = struct {
 
                     // first layer
                     if (log_m02 == gf.modulus) {
-                        xor(s2, s0);
-                        xor(s3, s1);
+                        Engine.xor(s2, s0);
+                        Engine.xor(s3, s1);
                     } else {
-                        fftPartial(s0, s2, log_m02);
-                        fftPartial(s1, s3, log_m02);
+                        Engine.fftPartial(s0, s2, log_m02);
+                        Engine.fftPartial(s1, s3, log_m02);
                     }
 
                     // second layer
                     if (log_m01 == gf.modulus) {
-                        xor(s1, s0);
+                        Engine.xor(s1, s0);
                     } else {
-                        fftPartial(s0, s1, log_m01);
+                        Engine.fftPartial(s0, s1, log_m01);
                     }
 
                     if (log_m23 == gf.modulus) {
-                        xor(s3, s2);
+                        Engine.xor(s3, s2);
                     } else {
-                        fftPartial(s2, s3, log_m23);
+                        Engine.fftPartial(s2, s3, log_m23);
                     }
                 }
             }
@@ -195,34 +195,11 @@ const Encoder = struct {
                 const s1 = shards.data[(pos + r + 1) * shards.shard_length ..][0..shards.shard_length];
 
                 if (log_m == gf.modulus) {
-                    xor(s1, s0);
+                    Engine.xor(s1, s0);
                 } else {
-                    fftPartial(s0, s1, log_m);
+                    Engine.fftPartial(s0, s1, log_m);
                 }
             }
-        }
-    }
-
-    fn fftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
-        const lut = tables.mul128[log_m];
-
-        for (x, y) |*a, *b| {
-            var x_lo: V = @bitCast(a[0..32].*);
-            var x_hi: V = @bitCast(a[32..64].*);
-
-            var y_lo: V = @bitCast(b[0..32].*);
-            var y_hi: V = @bitCast(b[32..64].*);
-
-            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
-
-            a[0..32].* = @bitCast(x_lo);
-            a[32..64].* = @bitCast(x_hi);
-
-            y_lo ^= x_lo;
-            y_hi ^= x_hi;
-
-            b[0..32].* = @bitCast(y_lo);
-            b[32..64].* = @bitCast(y_hi);
         }
     }
 
@@ -251,24 +228,24 @@ const Encoder = struct {
 
                     // first layer
                     if (log_m01 == gf.modulus) {
-                        xor(s1, s0);
+                        Engine.xor(s1, s0);
                     } else {
-                        ifftPartial(s0, s1, log_m01);
+                        Engine.ifftPartial(s0, s1, log_m01);
                     }
 
                     if (log_m23 == gf.modulus) {
-                        xor(s3, s2);
+                        Engine.xor(s3, s2);
                     } else {
-                        ifftPartial(s2, s3, log_m23);
+                        Engine.ifftPartial(s2, s3, log_m23);
                     }
 
                     // second layer
                     if (log_m02 == gf.modulus) {
-                        xor(s2, s0);
-                        xor(s3, s1);
+                        Engine.xor(s2, s0);
+                        Engine.xor(s3, s1);
                     } else {
-                        ifftPartial(s0, s2, log_m02);
-                        ifftPartial(s1, s3, log_m02);
+                        Engine.ifftPartial(s0, s2, log_m02);
+                        Engine.ifftPartial(s1, s3, log_m02);
                     }
                 }
             }
@@ -284,107 +261,16 @@ const Encoder = struct {
             if (log_m == gf.modulus) {
                 const s0 = shards.data[(pos + distance) * shards.shard_length ..][0..shards.shard_length];
                 const s1 = shards.data[pos * shards.shard_length ..][0..shards.shard_length];
-                xor(s0, s1);
+                Engine.xor(s0, s1);
             } else {
                 for (0..distance) |i| {
                     // TODO simplify this slicing
                     const s0 = shards.data[0 .. (pos + distance) * shards.shard_length][(pos + i) * shards.shard_length ..][0..shards.shard_length];
                     const s1 = shards.data[(pos + distance) * shards.shard_length ..][i * shards.shard_length ..][0..shards.shard_length];
-                    ifftPartial(s0, s1, log_m);
+                    Engine.ifftPartial(s0, s1, log_m);
                 }
             }
         }
-    }
-
-    fn ifftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
-        const lut = tables.mul128[log_m];
-
-        for (x, y) |*a, *b| {
-            var x_lo: V = @bitCast(a[0..32].*);
-            var x_hi: V = @bitCast(a[32..64].*);
-
-            var y_lo: V = @bitCast(b[0..32].*);
-            var y_hi: V = @bitCast(b[32..64].*);
-
-            y_lo ^= x_lo;
-            y_hi ^= x_hi;
-
-            b[0..32].* = @bitCast(y_lo);
-            b[32..64].* = @bitCast(y_hi);
-
-            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
-
-            a[0..32].* = @bitCast(x_lo);
-            a[32..64].* = @bitCast(x_hi);
-        }
-    }
-
-    fn xor(a: [][64]u8, b: [][64]u8) void {
-        std.debug.assert(a.len == b.len);
-        for (a, b) |*ac, bc| {
-            for (ac, bc) |*x, y| x.* ^= y;
-        }
-    }
-
-    fn mul256(lo: V, hi: V, lut: tables.Lut) struct { V, V } {
-        var prod_lo: V = undefined;
-        var prod_hi: V = undefined;
-
-        const clr_mask: V = @splat(0x0f);
-
-        const data_0 = lo & clr_mask;
-        prod_lo = shuffle256epi8(broadcastU128(lut[0][0]), data_0);
-        prod_hi = shuffle256epi8(broadcastU128(lut[1][0]), data_0);
-
-        const data_1 = (lo >> @splat(4)) & clr_mask;
-        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][1]), data_1);
-        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][1]), data_1);
-
-        const data_2 = hi & clr_mask;
-        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][2]), data_2);
-        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][2]), data_2);
-
-        const data_3 = (hi >> @splat(4)) & clr_mask;
-        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][3]), data_3);
-        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][3]), data_3);
-
-        return .{ prod_lo, prod_hi };
-    }
-
-    // TODO optimize
-    fn broadcastU128(x: u128) V {
-        const lo: [16]u8 = @bitCast(x);
-        var res: V = undefined;
-
-        for (0..16) |i| {
-            res[i] = lo[i];
-            res[i + 16] = lo[i];
-        }
-
-        return res;
-    }
-
-    // TODO optimize
-    fn shuffle256epi8(a: V, b: V) V {
-        var res: V = @splat(0);
-
-        for (0..16) |i| {
-            if ((b[i] & 0x80) == 0)
-                res[i] = a[b[i] % 16];
-
-            if ((b[i + 16] & 0x80) == 0)
-                res[i + 16] = a[b[i + 16] % 16 + 16];
-        }
-
-        return res;
-    }
-
-    fn mulAdd256(x_lo: V, x_hi: V, y_lo: V, y_hi: V, lut: tables.Lut) struct { V, V } {
-        const prod_lo, const prod_hi = mul256(y_lo, y_hi, lut);
-        return .{
-            x_lo ^ prod_lo,
-            x_hi ^ prod_hi,
-        };
     }
 };
 
@@ -597,6 +483,122 @@ const Decoder = struct {
     }
 };
 
+const Engine = struct {
+    fn fftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+        const lut = tables.mul128[log_m];
+
+        for (x, y) |*a, *b| {
+            var x_lo: V = @bitCast(a[0..32].*);
+            var x_hi: V = @bitCast(a[32..64].*);
+
+            var y_lo: V = @bitCast(b[0..32].*);
+            var y_hi: V = @bitCast(b[32..64].*);
+
+            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
+
+            a[0..32].* = @bitCast(x_lo);
+            a[32..64].* = @bitCast(x_hi);
+
+            y_lo ^= x_lo;
+            y_hi ^= x_hi;
+
+            b[0..32].* = @bitCast(y_lo);
+            b[32..64].* = @bitCast(y_hi);
+        }
+    }
+
+    fn ifftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+        const lut = tables.mul128[log_m];
+
+        for (x, y) |*a, *b| {
+            var x_lo: V = @bitCast(a[0..32].*);
+            var x_hi: V = @bitCast(a[32..64].*);
+
+            var y_lo: V = @bitCast(b[0..32].*);
+            var y_hi: V = @bitCast(b[32..64].*);
+
+            y_lo ^= x_lo;
+            y_hi ^= x_hi;
+
+            b[0..32].* = @bitCast(y_lo);
+            b[32..64].* = @bitCast(y_hi);
+
+            x_lo, x_hi = mulAdd256(x_lo, x_hi, y_lo, y_hi, lut);
+
+            a[0..32].* = @bitCast(x_lo);
+            a[32..64].* = @bitCast(x_hi);
+        }
+    }
+
+    fn xor(a: [][64]u8, b: [][64]u8) void {
+        std.debug.assert(a.len == b.len);
+        for (a, b) |*ac, bc| {
+            for (ac, bc) |*x, y| x.* ^= y;
+        }
+    }
+
+    fn mul256(lo: V, hi: V, lut: tables.Lut) struct { V, V } {
+        var prod_lo: V = undefined;
+        var prod_hi: V = undefined;
+
+        const clr_mask: V = @splat(0x0f);
+
+        const data_0 = lo & clr_mask;
+        prod_lo = shuffle256epi8(broadcastU128(lut[0][0]), data_0);
+        prod_hi = shuffle256epi8(broadcastU128(lut[1][0]), data_0);
+
+        const data_1 = (lo >> @splat(4)) & clr_mask;
+        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][1]), data_1);
+        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][1]), data_1);
+
+        const data_2 = hi & clr_mask;
+        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][2]), data_2);
+        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][2]), data_2);
+
+        const data_3 = (hi >> @splat(4)) & clr_mask;
+        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][3]), data_3);
+        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][3]), data_3);
+
+        return .{ prod_lo, prod_hi };
+    }
+
+    // TODO optimize
+    fn broadcastU128(x: u128) V {
+        const lo: [16]u8 = @bitCast(x);
+        var res: V = undefined;
+
+        for (0..16) |i| {
+            res[i] = lo[i];
+            res[i + 16] = lo[i];
+        }
+
+        return res;
+    }
+
+    // TODO optimize
+    fn shuffle256epi8(a: V, b: V) V {
+        var res: V = @splat(0);
+
+        for (0..16) |i| {
+            if ((b[i] & 0x80) == 0)
+                res[i] = a[b[i] % 16];
+
+            if ((b[i + 16] & 0x80) == 0)
+                res[i + 16] = a[b[i + 16] % 16 + 16];
+        }
+
+        return res;
+    }
+
+    fn mulAdd256(x_lo: V, x_hi: V, y_lo: V, y_hi: V, lut: tables.Lut) struct { V, V } {
+        const prod_lo, const prod_hi = mul256(y_lo, y_hi, lut);
+        return .{
+            x_lo ^ prod_lo,
+            x_hi ^ prod_hi,
+        };
+    }
+};
+
 const Shards = struct {
     shard_count: u64,
     /// 64 byte chunks
@@ -710,7 +712,7 @@ test "decode" {
     std.testing.allocator.free(res);
 }
 
-test "Encoder.ifftPartial" {
+test "Engine.ifftPartial" {
     try ifftPartialTest(
         @constCast(&[2][64]u8{ .{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63 }, .{ 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127 } }),
         @constCast(&[2][64]u8{ .{ 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191 }, .{ 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255 } }),
@@ -735,7 +737,7 @@ fn ifftPartialTest(
     expected_x: [][64]u8,
     expected_y: [][64]u8,
 ) !void {
-    Encoder.ifftPartial(x, y, log_m);
+    Engine.ifftPartial(x, y, log_m);
 
     try std.testing.expect(std.mem.eql(u8, &x[0], &expected_x[0]));
     try std.testing.expect(std.mem.eql(u8, &y[0], &expected_y[0]));
@@ -743,7 +745,7 @@ fn ifftPartialTest(
     try std.testing.expect(std.mem.eql(u8, &y[1], &expected_y[1]));
 }
 
-test "Encoder.mulAdd256" {
+test "Engine.mulAdd256" {
     try mulAdd256Test(@Vector(4, u64){ 506097522914230528, 1084818905618843912, 1663540288323457296, 2242261671028070680 }, @Vector(4, u64){ 2820983053732684064, 3399704436437297448, 3978425819141910832, 4557147201846524216 }, @Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, @Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, 30583, @Vector(4, u64){ 2025808526283708955, 1447087143579095571, 868365760874482187, 289644378169868803 }, @Vector(4, u64){ 434320308619640833, 1013041691324254217, 1591763074028867601, 2170484456733480985 });
 }
 
@@ -756,7 +758,7 @@ fn mulAdd256Test(
     expected_lo: @Vector(4, u64),
     expected_hi: @Vector(4, u64),
 ) !void {
-    const x_lo_res, const x_hi_res = Encoder.mulAdd256(
+    const x_lo_res, const x_hi_res = Engine.mulAdd256(
         @bitCast(x_lo),
         @bitCast(x_hi),
         @bitCast(y_lo),
@@ -764,14 +766,14 @@ fn mulAdd256Test(
         tables.mul128[table_index],
     );
 
-    const expected_prod_lo: Encoder.V = @bitCast(expected_lo);
-    const expected_prod_hi: Encoder.V = @bitCast(expected_hi);
+    const expected_prod_lo: V = @bitCast(expected_lo);
+    const expected_prod_hi: V = @bitCast(expected_hi);
 
     try std.testing.expectEqual(x_lo_res, expected_prod_lo);
     try std.testing.expectEqual(x_hi_res, expected_prod_hi);
 }
 
-test "Encoder.mul256" {
+test "Engine.mul256" {
     try mul256Test(@Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, @Vector(4, u64){ 9259542123273814144, 9259542123273814144, 9259542123273814144, 9259542123273814144 }, 30583, @Vector(4, u64){ 1953184666628070171, 1953184666628070171, 1953184666628070171, 1953184666628070171 }, @Vector(4, u64){ 2387225703656530209, 2387225703656530209, 2387225703656530209, 2387225703656530209 });
 
     try mul256Test(@Vector(4, u64){ 1012762419733073422, 1012762419733073422, 1012762419733073422, 1012762419733073422 }, @Vector(4, u64){ 16710579925595711463, 16710579925595711463, 16710579925595711463, 16710579925595711463 }, 17476, @Vector(4, u64){ 11212726789901884315, 11212726789901884315, 11212726789901884315, 11212726789901884315 }, @Vector(4, u64){ 11646767826930344353, 11646767826930344353, 11646767826930344353, 11646767826930344353 });
@@ -788,14 +790,14 @@ fn mul256Test(
     expected_lo: @Vector(4, u64),
     expected_hi: @Vector(4, u64),
 ) !void {
-    const prod_lo, const prod_hi = Encoder.mul256(
+    const prod_lo, const prod_hi = Engine.mul256(
         @bitCast(y_lo),
         @bitCast(y_hi),
         tables.mul128[table_index],
     );
 
-    const expected_prod_lo: Encoder.V = @bitCast(expected_lo);
-    const expected_prod_hi: Encoder.V = @bitCast(expected_hi);
+    const expected_prod_lo: V = @bitCast(expected_lo);
+    const expected_prod_hi: V = @bitCast(expected_hi);
 
     try std.testing.expectEqual(prod_lo, expected_prod_lo);
     try std.testing.expectEqual(prod_hi, expected_prod_hi);
