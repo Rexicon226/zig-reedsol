@@ -3,6 +3,7 @@
 pub const order = 65536;
 pub const modulus = order - 1;
 pub const polynomial = 65581;
+pub const bits = 16;
 
 pub const cantor_basis: [16]u16 = .{
     0x0001, 0xACCA, 0x3C0E, 0x163E,

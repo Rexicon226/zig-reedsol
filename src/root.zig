@@ -1,10 +1,11 @@
 const std = @import("std");
+
 const tables = @import("tables");
+const utils = @import("utils.zig");
 const gf = @import("gf.zig");
+const walsh_hadamard = @import("walsh_hadamard.zig");
 
 const V = @Vector(32, u8);
-
-pub fn main() void {}
 
 fn encode(allocator: std.mem.Allocator, original_count: u64, recovery_count: u64, original: []const []const u8) ![]const [64]u8 {
     if (original.len == 0) return error.TooFewOriginalShards;
@@ -485,8 +486,15 @@ const Decoder = struct {
 
     fn evalPoly(d: *Decoder, truncated_size: u64) void {
         const work = &d.work;
-        _ = work;
-        _ = truncated_size;
+
+        walsh_hadamard.fwht(&work.erasures, truncated_size);
+
+        for (&work.erasures, tables.log_walsh) |*e, factor| {
+            const product = @as(u32, @intCast(e.*)) * @as(u32, @intCast(factor));
+            e.* = utils.addMod(@as(u16, @truncate(product)), @as(u16, @truncate(product >> gf.bits)));
+        }
+
+        walsh_hadamard.fwht(&work.erasures, gf.order);
     }
 };
 
