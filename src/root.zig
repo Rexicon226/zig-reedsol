@@ -34,13 +34,13 @@ const Encoder = struct {
             w.shards.deinit(allocator);
         }
 
-        fn undoLastChunkEncoding(w: *Work) void {
+        fn undoLastChunkEncoding(w: *Work, start: usize, end: usize) void {
             const whole_chunk_count = w.shard_bytes / 64;
             const tail_len = w.shard_bytes % 64;
 
             if (tail_len == 0) return;
 
-            for (0..w.recovery_count) |i| {
+            for (start..end) |i| {
                 var last_chunk = w.shards.data[i * w.shards.shard_length ..][0..w.shards.shard_length][whole_chunk_count];
                 std.mem.copyForwards(u8, last_chunk[tail_len / 2 ..], last_chunk[32 .. 32 + tail_len / 2]);
             }
@@ -132,7 +132,7 @@ const Encoder = struct {
 
         // undo last chunks encoding
 
-        work.undoLastChunkEncoding();
+        work.undoLastChunkEncoding(0, work.recovery_count);
 
         return work.shards.data;
     }
@@ -362,13 +362,14 @@ const Decoder = struct {
             allocator.free(w.received);
         }
 
-        fn undoLastChunkEncoding(w: *Work) void {
+        // TODO interface
+        fn undoLastChunkEncoding(w: *Work, start: usize, end: usize) void {
             const whole_chunk_count = w.shard_bytes / 64;
             const tail_len = w.shard_bytes % 64;
 
             if (tail_len == 0) return;
 
-            for (0..w.recovery_count) |i| {
+            for (start..end) |i| {
                 var last_chunk = w.shards.data[i * w.shards.shard_length ..][0..w.shards.shard_length][whole_chunk_count];
                 std.mem.copyForwards(u8, last_chunk[tail_len / 2 ..], last_chunk[32 .. 32 + tail_len / 2]);
             }
@@ -479,7 +480,53 @@ const Decoder = struct {
                 work.erasures[i] = 1;
         }
 
+        // evaluate polynomial
+
         d.evalPoly(original_end);
+
+        // multiply shards
+
+        for (0..work.recovery_count) |i| {
+            if (work.received[i])
+                Engine.mul(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], work.erasures[i])
+            else
+                @memset(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], @splat(0));
+        }
+
+        work.shards.zero(work.recovery_count, chunk_size);
+
+        for (chunk_size..original_end) |i| {
+            if (work.received[i])
+                Engine.mul(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], work.erasures[i])
+            else
+                @memset(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], @splat(0));
+        }
+
+        work.shards.zero(original_end, work.shards.data.len);
+
+        d.ifft(0, work.shards.shard_length, original_end, 0);
+
+        // formal derivative
+        for (1..work.shards.data.len) |i| {
+            // intCast is safe because i cannot be 0 nor usize max
+            const width: u64 = @as(u64, 1) << @intCast(@ctz(i));
+            const s0 = work.shards.data[(i - width) * work.shards.shard_length ..][0..work.shards.shard_length];
+            const s1 = work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length];
+            Engine.xor(s0, s1);
+        }
+
+        d.fft(0, work.shards.shard_length, original_end, 0);
+
+        // reveal erasures
+
+        for (chunk_size..original_end) |i| {
+            if (work.received[i])
+                Engine.mul(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], work.erasures[i]);
+        }
+
+        // undo last chunk encoding
+
+        work.undoLastChunkEncoding(work.original_base_pos, work.original_base_pos + work.original_count);
 
         return work.shards.data;
     }
@@ -495,6 +542,146 @@ const Decoder = struct {
         }
 
         walsh_hadamard.fwht(&work.erasures, gf.order);
+    }
+
+    // Same as Encoder fft, should be a seperate method for the Engine interface
+    // TODO Engine interface
+    fn fft(e: *Decoder, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
+        const work = &e.work;
+        const shards = &work.shards;
+
+        var distance = size >> 2;
+        var distance_4 = size;
+        while (distance != 0) {
+            var r: u64 = 0;
+            while (r < truncated_size) : (r += distance_4) {
+                const base = r + distance + skew_delta - 1;
+
+                const log_m01 = tables.skew[base + distance * 0];
+                const log_m02 = tables.skew[base + distance * 1];
+                const log_m23 = tables.skew[base + distance * 2];
+
+                for (r..r + distance) |i| {
+                    const position = pos + i;
+
+                    const s0 = shards.data[(position + distance * 0) * shards.shard_length ..][0..shards.shard_length];
+                    const s1 = shards.data[(position + distance * 1) * shards.shard_length ..][0..shards.shard_length];
+                    const s2 = shards.data[(position + distance * 2) * shards.shard_length ..][0..shards.shard_length];
+                    const s3 = shards.data[(position + distance * 3) * shards.shard_length ..][0..shards.shard_length];
+
+                    // first layer
+                    if (log_m02 == gf.modulus) {
+                        Engine.xor(s2, s0);
+                        Engine.xor(s3, s1);
+                    } else {
+                        Engine.fftPartial(s0, s2, log_m02);
+                        Engine.fftPartial(s1, s3, log_m02);
+                    }
+
+                    // second layer
+                    if (log_m01 == gf.modulus) {
+                        Engine.xor(s1, s0);
+                    } else {
+                        Engine.fftPartial(s0, s1, log_m01);
+                    }
+
+                    if (log_m23 == gf.modulus) {
+                        Engine.xor(s3, s2);
+                    } else {
+                        Engine.fftPartial(s2, s3, log_m23);
+                    }
+                }
+            }
+            distance_4 = distance;
+            distance >>= 2;
+        }
+
+        if (distance_4 == 2) {
+            var r: usize = 0;
+            while (r < truncated_size) : (r += 2) {
+                const log_m = tables.skew[r + skew_delta];
+                const s0 = shards.data[(pos + r) * shards.shard_length ..][0..shards.shard_length];
+                const s1 = shards.data[(pos + r + 1) * shards.shard_length ..][0..shards.shard_length];
+
+                if (log_m == gf.modulus) {
+                    Engine.xor(s1, s0);
+                } else {
+                    Engine.fftPartial(s0, s1, log_m);
+                }
+            }
+        }
+    }
+
+    // Same as Encoder fft, should be a seperate method for the Engine interface
+    // TODO Engine interface
+    fn ifft(e: *Decoder, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
+        const work = &e.work;
+        const shards = &work.shards;
+
+        var distance: u64 = 1;
+        var distance_4: u64 = 4;
+        while (distance_4 <= size) {
+            var r: u64 = 0;
+            while (r < truncated_size) : (r += distance_4) {
+                const base = r + distance + skew_delta - 1;
+
+                const log_m01 = tables.skew[base + distance * 0];
+                const log_m02 = tables.skew[base + distance * 1];
+                const log_m23 = tables.skew[base + distance * 2];
+
+                for (r..r + distance) |i| {
+                    const position = pos + i;
+
+                    const s0 = shards.data[(position + distance * 0) * shards.shard_length ..][0..shards.shard_length];
+                    const s1 = shards.data[(position + distance * 1) * shards.shard_length ..][0..shards.shard_length];
+                    const s2 = shards.data[(position + distance * 2) * shards.shard_length ..][0..shards.shard_length];
+                    const s3 = shards.data[(position + distance * 3) * shards.shard_length ..][0..shards.shard_length];
+
+                    // first layer
+                    if (log_m01 == gf.modulus) {
+                        Engine.xor(s1, s0);
+                    } else {
+                        Engine.ifftPartial(s0, s1, log_m01);
+                    }
+
+                    if (log_m23 == gf.modulus) {
+                        Engine.xor(s3, s2);
+                    } else {
+                        Engine.ifftPartial(s2, s3, log_m23);
+                    }
+
+                    // second layer
+                    if (log_m02 == gf.modulus) {
+                        Engine.xor(s2, s0);
+                        Engine.xor(s3, s1);
+                    } else {
+                        Engine.ifftPartial(s0, s2, log_m02);
+                        Engine.ifftPartial(s1, s3, log_m02);
+                    }
+                }
+            }
+            distance = distance_4;
+            distance_4 <<= 2;
+        }
+
+        // FINAL ODD LAYER
+
+        if (distance < size) {
+            const log_m = tables.skew[distance + skew_delta - 1];
+
+            if (log_m == gf.modulus) {
+                const s0 = shards.data[(pos + distance) * shards.shard_length ..][0..shards.shard_length];
+                const s1 = shards.data[pos * shards.shard_length ..][0..shards.shard_length];
+                Engine.xor(s0, s1);
+            } else {
+                for (0..distance) |i| {
+                    // TODO simplify this slicing
+                    const s0 = shards.data[0 .. (pos + distance) * shards.shard_length][(pos + i) * shards.shard_length ..][0..shards.shard_length];
+                    const s1 = shards.data[(pos + distance) * shards.shard_length ..][i * shards.shard_length ..][0..shards.shard_length];
+                    Engine.ifftPartial(s0, s1, log_m);
+                }
+            }
+        }
     }
 };
 
@@ -603,6 +790,18 @@ const Engine = struct {
         }
 
         return res;
+    }
+
+    // TODO Engine interface
+    fn mul(x: [][64]u8, log_m: u16) void {
+        const lut = tables.mul_128[log_m];
+
+        for (x) |*chunk| {
+            var x_lo: V = @bitCast(chunk[0..32].*);
+            var x_hi: V = @bitCast(chunk[32..64].*);
+
+            x_lo, x_hi = mul256(x_lo, x_hi, lut);
+        }
     }
 
     fn mulAdd256(x_lo: V, x_hi: V, y_lo: V, y_hi: V, lut: tables.Lut) struct { V, V } {
@@ -725,6 +924,10 @@ test "decode" {
 
     const res = try decode(std.testing.allocator, count, count, &original, &recovery);
     std.testing.allocator.free(res);
+
+    for (original, res) |o, r| {
+        try std.testing.expectEqual(o.?, &r);
+    }
 }
 
 test "Engine.ifftPartial" {
