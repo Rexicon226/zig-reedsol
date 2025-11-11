@@ -281,8 +281,6 @@ fn decode(
     original: []const ?[]const u8,
     recovery: []const ?[64]u8,
 ) !struct { []const [64]u8, usize } {
-    if (original.len == 0) return error.TooFewOriginalShards;
-
     const shard_bytes = blk: {
         for (recovery) |rec| {
             if (rec) |r| {
@@ -461,6 +459,8 @@ const Decoder = struct {
 
     fn decode(d: *Decoder) ![]const [64]u8 {
         const work = &d.work;
+        if (work.original_received_count + work.recovery_received_count < work.original_count)
+            return error.NotEnoughShards;
 
         const chunk_size = try std.math.ceilPowerOfTwo(u64, work.recovery_count);
         const original_end = chunk_size + work.original_count;
