@@ -94,13 +94,15 @@ const Encoder = struct {
 
     fn encode(e: *Encoder) ![]const [64]u8 {
         const work = &e.work;
+        const shards = &e.work.shards;
+
         if (work.original_received_count != work.original_count) return error.TooFewOriginalShards;
 
         const chunk_size = try std.math.ceilPowerOfTwo(u64, work.recovery_count);
 
         // first chunk
         const first_count = @min(work.original_count, chunk_size);
-        work.shards.zero(first_count, chunk_size);
+        shards.zero(first_count, chunk_size);
         e.ifft(0, chunk_size, first_count, chunk_size);
 
         if (work.original_count > chunk_size) {
@@ -109,8 +111,8 @@ const Encoder = struct {
             var chunk_start = chunk_size;
             while (chunk_start + chunk_size < work.original_count) : (chunk_start += chunk_size) {
                 e.ifft(chunk_start, chunk_size, chunk_size, chunk_start + chunk_size);
-                const s0 = work.shards.data[0..chunk_size];
-                const s1 = work.shards.data[chunk_start * work.shards.shard_length ..][0..chunk_size];
+                const s0 = shards.data[0..chunk_size];
+                const s1 = shards.data[chunk_start * shards.shard_length ..][0..chunk_size];
                 Engine.xor(s0, s1);
             }
 
@@ -118,10 +120,10 @@ const Encoder = struct {
 
             const last_count = work.original_count % chunk_size;
             if (last_count > 0) {
-                work.shards.zero(chunk_start + last_count, work.shards.data.len);
+                shards.zero(chunk_start + last_count, shards.data.len);
                 e.ifft(chunk_start, chunk_size, last_count, chunk_start + chunk_size);
-                const s0 = work.shards.data[0..chunk_size];
-                const s1 = work.shards.data[chunk_start * work.shards.shard_length ..][0..chunk_size];
+                const s0 = shards.data[0..chunk_size];
+                const s1 = shards.data[chunk_start * shards.shard_length ..][0..chunk_size];
                 Engine.xor(s0, s1);
             }
         }
@@ -134,7 +136,7 @@ const Encoder = struct {
 
         work.undoLastChunkEncoding(0, work.recovery_count);
 
-        return work.shards.data;
+        return shards.data;
     }
 
     fn fft(e: *Encoder, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
@@ -459,6 +461,8 @@ const Decoder = struct {
 
     fn decode(d: *Decoder) ![]const [64]u8 {
         const work = &d.work;
+        const shards = &d.work.shards;
+
         if (work.original_received_count + work.recovery_received_count < work.original_count)
             return error.NotEnoughShards;
 
@@ -485,47 +489,47 @@ const Decoder = struct {
 
         for (0..work.recovery_count) |i| {
             if (work.received[i])
-                Engine.mul(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], work.erasures[i])
+                Engine.mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], work.erasures[i])
             else
-                @memset(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], @splat(0));
+                @memset(shards.data[i * shards.shard_length ..][0..shards.shard_length], @splat(0));
         }
 
-        work.shards.zero(work.recovery_count, chunk_size);
+        shards.zero(work.recovery_count, chunk_size);
 
         for (chunk_size..original_end) |i| {
             if (work.received[i])
-                Engine.mul(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], work.erasures[i])
+                Engine.mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], work.erasures[i])
             else
-                @memset(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], @splat(0));
+                @memset(shards.data[i * shards.shard_length ..][0..shards.shard_length], @splat(0));
         }
 
-        work.shards.zero(original_end, work.shards.data.len);
+        shards.zero(original_end, shards.data.len);
 
-        d.ifft(0, work.shards.data.len, original_end, 0);
+        d.ifft(0, shards.data.len, original_end, 0);
 
         // formal derivative
-        for (1..work.shards.data.len) |i| {
+        for (1..shards.data.len) |i| {
             // intCast is safe because i cannot be 0 nor usize max
             const width: u64 = @as(u64, 1) << @intCast(@ctz(i));
-            const s0 = work.shards.data[(i - width) * work.shards.shard_length ..][0..width];
-            const s1 = work.shards.data[i * work.shards.shard_length ..][0..width];
+            const s0 = shards.data[(i - width) * shards.shard_length ..][0..width];
+            const s1 = shards.data[i * shards.shard_length ..][0..width];
             Engine.xor(s0, s1);
         }
 
-        d.fft(0, work.shards.data.len, original_end, 0);
+        d.fft(0, shards.data.len, original_end, 0);
 
         // reveal erasures
 
         for (chunk_size..original_end) |i| {
             if (work.received[i])
-                Engine.mul(work.shards.data[i * work.shards.shard_length ..][0..work.shards.shard_length], gf.modulus - work.erasures[i]);
+                Engine.mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], gf.modulus - work.erasures[i]);
         }
 
         // undo last chunk encoding
 
         work.undoLastChunkEncoding(work.original_base_pos, work.original_base_pos + work.original_count);
 
-        return work.shards.data;
+        return shards.data;
     }
 
     fn evalPoly(d: *Decoder, truncated_size: u64) void {
