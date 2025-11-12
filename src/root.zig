@@ -352,7 +352,7 @@ const Decoder = struct {
 
         // evaluate polynomial
 
-        d.evalPoly(original_end);
+        Engine.evalPoly(work, original_end);
 
         // multiply shards
 
@@ -399,19 +399,6 @@ const Decoder = struct {
         work.undoLastChunkEncoding(work.original_base_pos, work.original_base_pos + work.original_count);
 
         return shards.data;
-    }
-
-    fn evalPoly(d: *Decoder, truncated_size: u64) void {
-        const work = &d.work;
-
-        walsh_hadamard.fwht(&work.erasures, truncated_size);
-
-        for (&work.erasures, tables.log_walsh) |*e, factor| {
-            const product = @as(u32, @intCast(e.*)) * @as(u32, @intCast(factor));
-            e.* = utils.addMod(@as(u16, @truncate(product)), @as(u16, @truncate(product >> gf.bits)));
-        }
-
-        walsh_hadamard.fwht(&work.erasures, gf.order);
     }
 };
 
@@ -594,6 +581,17 @@ const Engine = struct {
             a[0..32].* = @bitCast(x_lo);
             a[32..64].* = @bitCast(x_hi);
         }
+    }
+
+    fn evalPoly(work: anytype, truncated_size: u64) void {
+        walsh_hadamard.fwht(&work.erasures, truncated_size);
+
+        for (&work.erasures, tables.log_walsh) |*e, factor| {
+            const product = @as(u32, @intCast(e.*)) * @as(u32, @intCast(factor));
+            e.* = utils.addMod(@as(u16, @truncate(product)), @as(u16, @truncate(product >> gf.bits)));
+        }
+
+        walsh_hadamard.fwht(&work.erasures, gf.order);
     }
 
     fn xor(a: [][64]u8, b: [][64]u8) void {
