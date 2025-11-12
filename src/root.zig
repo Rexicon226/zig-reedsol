@@ -12,6 +12,7 @@ fn encode(
     original_count: u64,
     recovery_count: u64,
     original: []const []const u8,
+    Engine: anytype,
 ) ![]const [64]u8 {
     if (original.len == 0) return error.TooFewOriginalShards;
     const shard_bytes = original[0].len;
@@ -21,7 +22,7 @@ fn encode(
 
     for (original) |o| try encoder.addOriginalShard(o);
 
-    return try encoder.encode();
+    return try encoder.encode(Engine);
 }
 
 const Encoder = struct {
@@ -97,7 +98,7 @@ const Encoder = struct {
         work.original_received_count += 1;
     }
 
-    fn encode(e: *Encoder) ![]const [64]u8 {
+    fn encode(e: *Encoder, Engine: anytype) ![]const [64]u8 {
         const work = &e.work;
         const shards = &e.work.shards;
 
@@ -118,7 +119,7 @@ const Encoder = struct {
                 Engine.ifft(work, chunk_start, chunk_size, chunk_size, chunk_start + chunk_size);
                 const s0 = shards.data[0..chunk_size];
                 const s1 = shards.data[chunk_start * shards.shard_length ..][0..chunk_size];
-                Engine.xor(s0, s1);
+                xor(s0, s1);
             }
 
             // final partial chunk
@@ -129,7 +130,7 @@ const Encoder = struct {
                 Engine.ifft(work, chunk_start, chunk_size, last_count, chunk_start + chunk_size);
                 const s0 = shards.data[0..chunk_size];
                 const s1 = shards.data[chunk_start * shards.shard_length ..][0..chunk_size];
-                Engine.xor(s0, s1);
+                xor(s0, s1);
             }
         }
 
@@ -151,6 +152,7 @@ fn decode(
     recovery_count: u64,
     original: []const ?[]const u8,
     recovery: []const ?[64]u8,
+    Engine: anytype,
 ) ![]const [64]u8 {
     const shard_bytes = blk: {
         for (recovery) |rec| {
@@ -196,7 +198,7 @@ fn decode(
         }
     }
 
-    const data = try decoder.decode();
+    const data = try decoder.decode(Engine);
 
     const result = try allocator.alloc([64]u8, original_count);
     errdefer allocator.free(result);
@@ -327,7 +329,7 @@ const Decoder = struct {
         work.received[pos] = true;
     }
 
-    fn decode(d: *Decoder) ![][64]u8 {
+    fn decode(d: *Decoder, Engine: anytype) ![][64]u8 {
         const work = &d.work;
         const shards = &d.work.shards;
 
@@ -357,7 +359,7 @@ const Decoder = struct {
 
         for (0..work.recovery_count) |i| {
             if (work.received[i])
-                Engine.mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], work.erasures[i])
+                mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], work.erasures[i])
             else
                 @memset(shards.data[i * shards.shard_length ..][0..shards.shard_length], @splat(0));
         }
@@ -366,7 +368,7 @@ const Decoder = struct {
 
         for (chunk_size..original_end) |i| {
             if (work.received[i])
-                Engine.mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], work.erasures[i])
+                mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], work.erasures[i])
             else
                 @memset(shards.data[i * shards.shard_length ..][0..shards.shard_length], @splat(0));
         }
@@ -381,7 +383,7 @@ const Decoder = struct {
             const width: u64 = @as(u64, 1) << @intCast(@ctz(i));
             const s0 = shards.data[(i - width) * shards.shard_length ..][0..width];
             const s1 = shards.data[i * shards.shard_length ..][0..width];
-            Engine.xor(s0, s1);
+            xor(s0, s1);
         }
 
         Engine.fft(work, 0, shards.data.len, original_end, 0);
@@ -390,7 +392,7 @@ const Decoder = struct {
 
         for (chunk_size..original_end) |i| {
             if (!work.received[i])
-                Engine.mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], gf.modulus - work.erasures[i]);
+                mul(shards.data[i * shards.shard_length ..][0..shards.shard_length], gf.modulus - work.erasures[i]);
         }
 
         // undo last chunk encoding
@@ -401,7 +403,7 @@ const Decoder = struct {
     }
 };
 
-const Engine = struct {
+const AVX2Engine = struct {
     fn fft(work: anytype, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
         const shards = &work.shards;
 
@@ -426,24 +428,24 @@ const Engine = struct {
 
                     // first layer
                     if (log_m02 == gf.modulus) {
-                        Engine.xor(s2, s0);
-                        Engine.xor(s3, s1);
+                        xor(s2, s0);
+                        xor(s3, s1);
                     } else {
-                        Engine.fftPartial(s0, s2, log_m02);
-                        Engine.fftPartial(s1, s3, log_m02);
+                        fftPartial(s0, s2, log_m02);
+                        fftPartial(s1, s3, log_m02);
                     }
 
                     // second layer
                     if (log_m01 == gf.modulus) {
-                        Engine.xor(s1, s0);
+                        xor(s1, s0);
                     } else {
-                        Engine.fftPartial(s0, s1, log_m01);
+                        fftPartial(s0, s1, log_m01);
                     }
 
                     if (log_m23 == gf.modulus) {
-                        Engine.xor(s3, s2);
+                        xor(s3, s2);
                     } else {
-                        Engine.fftPartial(s2, s3, log_m23);
+                        fftPartial(s2, s3, log_m23);
                     }
                 }
             }
@@ -459,9 +461,9 @@ const Engine = struct {
                 const s1 = shards.data[(pos + r + 1) * shards.shard_length ..][0..shards.shard_length];
 
                 if (log_m == gf.modulus) {
-                    Engine.xor(s1, s0);
+                    xor(s1, s0);
                 } else {
-                    Engine.fftPartial(s0, s1, log_m);
+                    fftPartial(s0, s1, log_m);
                 }
             }
         }
@@ -491,24 +493,24 @@ const Engine = struct {
 
                     // first layer
                     if (log_m01 == gf.modulus) {
-                        Engine.xor(s1, s0);
+                        xor(s1, s0);
                     } else {
-                        Engine.ifftPartial(s0, s1, log_m01);
+                        ifftPartial(s0, s1, log_m01);
                     }
 
                     if (log_m23 == gf.modulus) {
-                        Engine.xor(s3, s2);
+                        xor(s3, s2);
                     } else {
-                        Engine.ifftPartial(s2, s3, log_m23);
+                        ifftPartial(s2, s3, log_m23);
                     }
 
                     // second layer
                     if (log_m02 == gf.modulus) {
-                        Engine.xor(s2, s0);
-                        Engine.xor(s3, s1);
+                        xor(s2, s0);
+                        xor(s3, s1);
                     } else {
-                        Engine.ifftPartial(s0, s2, log_m02);
-                        Engine.ifftPartial(s1, s3, log_m02);
+                        ifftPartial(s0, s2, log_m02);
+                        ifftPartial(s1, s3, log_m02);
                     }
                 }
             }
@@ -524,13 +526,13 @@ const Engine = struct {
             if (log_m == gf.modulus) {
                 const s0 = shards.data[(pos + distance) * shards.shard_length ..][0..distance];
                 const s1 = shards.data[pos * shards.shard_length ..][0..distance];
-                Engine.xor(s0, s1);
+                xor(s0, s1);
             } else {
                 for (0..distance) |i| {
                     // TODO simplify this slicing
                     const s0 = shards.data[0 .. (pos + distance) * shards.shard_length][(pos + i) * shards.shard_length ..][0..shards.shard_length];
                     const s1 = shards.data[(pos + distance) * shards.shard_length ..][i * shards.shard_length ..][0..shards.shard_length];
-                    Engine.ifftPartial(s0, s1, log_m);
+                    ifftPartial(s0, s1, log_m);
                 }
             }
         }
@@ -592,89 +594,89 @@ const Engine = struct {
 
         walsh_hadamard.fwht(&work.erasures, gf.order);
     }
-
-    fn xor(a: [][64]u8, b: [][64]u8) void {
-        std.debug.assert(a.len == b.len);
-        for (a, b) |*ac, bc| {
-            for (ac, bc) |*x, y| x.* ^= y;
-        }
-    }
-
-    fn mul256(lo: V, hi: V, lut: tables.Lut) struct { V, V } {
-        var prod_lo: V = undefined;
-        var prod_hi: V = undefined;
-
-        const clr_mask: V = @splat(0x0f);
-
-        const data_0 = lo & clr_mask;
-        prod_lo = shuffle256epi8(broadcastU128(lut[0][0]), data_0);
-        prod_hi = shuffle256epi8(broadcastU128(lut[1][0]), data_0);
-
-        const data_1 = (lo >> @splat(4)) & clr_mask;
-        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][1]), data_1);
-        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][1]), data_1);
-
-        const data_2 = hi & clr_mask;
-        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][2]), data_2);
-        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][2]), data_2);
-
-        const data_3 = (hi >> @splat(4)) & clr_mask;
-        prod_lo ^= shuffle256epi8(broadcastU128(lut[0][3]), data_3);
-        prod_hi ^= shuffle256epi8(broadcastU128(lut[1][3]), data_3);
-
-        return .{ prod_lo, prod_hi };
-    }
-
-    // TODO optimize
-    fn broadcastU128(x: u128) V {
-        const lo: [16]u8 = @bitCast(x);
-        var res: V = undefined;
-
-        for (0..16) |i| {
-            res[i] = lo[i];
-            res[i + 16] = lo[i];
-        }
-
-        return res;
-    }
-
-    // TODO optimize
-    fn shuffle256epi8(a: V, b: V) V {
-        var res: V = @splat(0);
-
-        for (0..16) |i| {
-            if ((b[i] & 0x80) == 0)
-                res[i] = a[b[i] % 16];
-
-            if ((b[i + 16] & 0x80) == 0)
-                res[i + 16] = a[b[i + 16] % 16 + 16];
-        }
-
-        return res;
-    }
-
-    fn mul(x: [][64]u8, log_m: u16) void {
-        const lut = tables.mul_128[log_m];
-
-        for (x) |*chunk| {
-            var x_lo: V = @bitCast(chunk[0..32].*);
-            var x_hi: V = @bitCast(chunk[32..64].*);
-
-            x_lo, x_hi = mul256(x_lo, x_hi, lut);
-
-            chunk[0..32].* = @bitCast(x_lo);
-            chunk[32..64].* = @bitCast(x_hi);
-        }
-    }
-
-    fn mulAdd256(x_lo: V, x_hi: V, y_lo: V, y_hi: V, lut: tables.Lut) struct { V, V } {
-        const prod_lo, const prod_hi = mul256(y_lo, y_hi, lut);
-        return .{
-            x_lo ^ prod_lo,
-            x_hi ^ prod_hi,
-        };
-    }
 };
+
+fn xor(a: [][64]u8, b: [][64]u8) void {
+    std.debug.assert(a.len == b.len);
+    for (a, b) |*ac, bc| {
+        for (ac, bc) |*x, y| x.* ^= y;
+    }
+}
+
+fn mul256(lo: V, hi: V, lut: tables.Lut) struct { V, V } {
+    var prod_lo: V = undefined;
+    var prod_hi: V = undefined;
+
+    const clr_mask: V = @splat(0x0f);
+
+    const data_0 = lo & clr_mask;
+    prod_lo = shuffle256epi8(broadcastU128(lut[0][0]), data_0);
+    prod_hi = shuffle256epi8(broadcastU128(lut[1][0]), data_0);
+
+    const data_1 = (lo >> @splat(4)) & clr_mask;
+    prod_lo ^= shuffle256epi8(broadcastU128(lut[0][1]), data_1);
+    prod_hi ^= shuffle256epi8(broadcastU128(lut[1][1]), data_1);
+
+    const data_2 = hi & clr_mask;
+    prod_lo ^= shuffle256epi8(broadcastU128(lut[0][2]), data_2);
+    prod_hi ^= shuffle256epi8(broadcastU128(lut[1][2]), data_2);
+
+    const data_3 = (hi >> @splat(4)) & clr_mask;
+    prod_lo ^= shuffle256epi8(broadcastU128(lut[0][3]), data_3);
+    prod_hi ^= shuffle256epi8(broadcastU128(lut[1][3]), data_3);
+
+    return .{ prod_lo, prod_hi };
+}
+
+// TODO optimize
+fn broadcastU128(x: u128) V {
+    const lo: [16]u8 = @bitCast(x);
+    var res: V = undefined;
+
+    for (0..16) |i| {
+        res[i] = lo[i];
+        res[i + 16] = lo[i];
+    }
+
+    return res;
+}
+
+// TODO optimize
+fn shuffle256epi8(a: V, b: V) V {
+    var res: V = @splat(0);
+
+    for (0..16) |i| {
+        if ((b[i] & 0x80) == 0)
+            res[i] = a[b[i] % 16];
+
+        if ((b[i + 16] & 0x80) == 0)
+            res[i + 16] = a[b[i + 16] % 16 + 16];
+    }
+
+    return res;
+}
+
+fn mul(x: [][64]u8, log_m: u16) void {
+    const lut = tables.mul_128[log_m];
+
+    for (x) |*chunk| {
+        var x_lo: V = @bitCast(chunk[0..32].*);
+        var x_hi: V = @bitCast(chunk[32..64].*);
+
+        x_lo, x_hi = mul256(x_lo, x_hi, lut);
+
+        chunk[0..32].* = @bitCast(x_lo);
+        chunk[32..64].* = @bitCast(x_hi);
+    }
+}
+
+fn mulAdd256(x_lo: V, x_hi: V, y_lo: V, y_hi: V, lut: tables.Lut) struct { V, V } {
+    const prod_lo, const prod_hi = mul256(y_lo, y_hi, lut);
+    return .{
+        x_lo ^ prod_lo,
+        x_hi ^ prod_hi,
+    };
+}
 
 const Shards = struct {
     shard_count: u64,
@@ -760,7 +762,13 @@ test "encode and decode" {
         shard.* = input[start..end];
     }
 
-    const recovery = try encode(std.testing.allocator, count, count, &original);
+    const recovery = try encode(
+        std.testing.allocator,
+        count,
+        count,
+        &original,
+        AVX2Engine,
+    );
     defer std.testing.allocator.free(recovery);
 
     var empty: [count]?[]const u8 = @splat(null);
@@ -777,6 +785,7 @@ test "encode and decode" {
         count,
         &empty,
         &recovery_shards,
+        AVX2Engine,
     );
     defer std.testing.allocator.free(recovered);
 
@@ -802,7 +811,13 @@ test "encode" {
         shard.* = input[start..end];
     }
 
-    const recovery = try encode(testing.allocator, count, count, &original);
+    const recovery = try encode(
+        testing.allocator,
+        count,
+        count,
+        &original,
+        AVX2Engine,
+    );
     defer testing.allocator.free(recovery);
 
     const expected: [16][64]u8 = .{ .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 }, .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 }, .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 }, .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 } };
@@ -842,7 +857,14 @@ test "decode with multiple original or recovery shards missing" {
         recovery[(c + 1) % count] = null;
         recovery[(r + 1) % count] = null;
 
-        const res = try decode(testing.allocator, count, count, &original_shards, &recovery);
+        const res = try decode(
+            testing.allocator,
+            count,
+            count,
+            &original_shards,
+            &recovery,
+            AVX2Engine,
+        );
         defer testing.allocator.free(res);
 
         for (0..count) |i| {
@@ -873,7 +895,14 @@ test "decode with 0 recovery shards" {
 
     const recovery: [16]?[64]u8 = @splat(null);
 
-    const res = try decode(testing.allocator, count, count, &original_shards, &recovery);
+    const res = try decode(
+        testing.allocator,
+        count,
+        count,
+        &original_shards,
+        &recovery,
+        AVX2Engine,
+    );
     defer testing.allocator.free(res);
 
     for (0..count) |i| {
@@ -902,7 +931,14 @@ test "decode with 0 original shards" {
 
     const recovery: [16]?[64]u8 = .{ .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 }, .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 }, .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 }, .{ 134, 135, 132, 133, 130, 131, 128, 129, 142, 143, 140, 141, 138, 139, 136, 137, 150, 151, 148, 149, 146, 147, 144, 145, 158, 159, 156, 157, 154, 155, 152, 153, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 18, 19, 16, 17, 22, 23, 20, 21, 26, 27, 24, 25, 30, 31, 28, 29 }, .{ 198, 199, 196, 197, 194, 195, 192, 193, 206, 207, 204, 205, 202, 203, 200, 201, 214, 215, 212, 213, 210, 211, 208, 209, 222, 223, 220, 221, 218, 219, 216, 217, 66, 67, 64, 65, 70, 71, 68, 69, 74, 75, 72, 73, 78, 79, 76, 77, 82, 83, 80, 81, 86, 87, 84, 85, 90, 91, 88, 89, 94, 95, 92, 93 }, .{ 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 22, 23, 20, 21, 18, 19, 16, 17, 30, 31, 28, 29, 26, 27, 24, 25, 130, 131, 128, 129, 134, 135, 132, 133, 138, 139, 136, 137, 142, 143, 140, 141, 146, 147, 144, 145, 150, 151, 148, 149, 154, 155, 152, 153, 158, 159, 156, 157 }, .{ 70, 71, 68, 69, 66, 67, 64, 65, 78, 79, 76, 77, 74, 75, 72, 73, 86, 87, 84, 85, 82, 83, 80, 81, 94, 95, 92, 93, 90, 91, 88, 89, 194, 195, 192, 193, 198, 199, 196, 197, 202, 203, 200, 201, 206, 207, 204, 205, 210, 211, 208, 209, 214, 215, 212, 213, 218, 219, 216, 217, 222, 223, 220, 221 } };
 
-    const res = try decode(testing.allocator, count, count, &empty, &recovery);
+    const res = try decode(
+        testing.allocator,
+        count,
+        count,
+        &empty,
+        &recovery,
+        AVX2Engine,
+    );
     defer testing.allocator.free(res);
 
     for (0..count) |i| {
@@ -937,7 +973,7 @@ fn ifftPartialTest(
     expected_x: [][64]u8,
     expected_y: [][64]u8,
 ) !void {
-    Engine.ifftPartial(x, y, log_m);
+    AVX2Engine.ifftPartial(x, y, log_m);
 
     try testing.expect(std.mem.eql(u8, &x[0], &expected_x[0]));
     try testing.expect(std.mem.eql(u8, &y[0], &expected_y[0]));
@@ -958,7 +994,7 @@ fn mulAdd256Test(
     expected_lo: @Vector(4, u64),
     expected_hi: @Vector(4, u64),
 ) !void {
-    const x_lo_res, const x_hi_res = Engine.mulAdd256(
+    const x_lo_res, const x_hi_res = mulAdd256(
         @bitCast(x_lo),
         @bitCast(x_hi),
         @bitCast(y_lo),
@@ -990,7 +1026,7 @@ fn mul256Test(
     expected_lo: @Vector(4, u64),
     expected_hi: @Vector(4, u64),
 ) !void {
-    const prod_lo, const prod_hi = Engine.mul256(
+    const prod_lo, const prod_hi = mul256(
         @bitCast(y_lo),
         @bitCast(y_hi),
         tables.mul_128[table_index],
