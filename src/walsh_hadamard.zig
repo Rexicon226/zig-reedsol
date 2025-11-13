@@ -21,7 +21,7 @@ pub fn fwht(data: *[gf.order]u16, m: u64) void {
         var r: u64 = 0;
         while (r < m) : (r += stride) {
             for (r..r + dist) |offset| {
-                fwht4(data, offset & 0xFFFF, dist & 0xFFFF);
+                fwht4(data, @truncate(offset), @truncate(dist));
             }
         }
         dist = stride;
@@ -33,7 +33,7 @@ pub fn fwht(data: *[gf.order]u16, m: u64) void {
 ///
 /// The 4-point structure combines values spaced at `stride` apart,
 /// computing pairwise sums and differences in a recursive pattern.
-fn fwht4(data: *[gf.order]u16, offset: u64, stride: u64) void {
+fn fwht4(data: *[gf.order]u16, offset: u16, stride: u16) void {
     // indices for this butterfly group
     const x0: u64 = offset + stride * 0;
     const x1: u64 = offset + stride * 1;
@@ -55,7 +55,7 @@ fn fwht4(data: *[gf.order]u16, offset: u64, stride: u64) void {
 /// 2-point Walsh-Hadamard butterfly.
 ///
 /// Each butterfly computes the field sum and difference of two points.
-fn fwht2(a: u16, b: u16) struct { u16, u16 } {
+inline fn fwht2(a: u16, b: u16) struct { u16, u16 } {
     const sum = utils.addMod(a, b);
     const dif = utils.subMod(a, b);
     return .{ sum, dif };
