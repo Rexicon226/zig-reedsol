@@ -278,7 +278,7 @@ const Decoder = struct {
             if (!d.received[i]) d.erasures[i] = 1;
         }
 
-        @memset(d.erasures[d.recovery_count..chunk_size], 0);
+        @memset(d.erasures[d.recovery_count..chunk_size], 1);
 
         // mark missing original shreds
         for (chunk_size..original_end) |i| {

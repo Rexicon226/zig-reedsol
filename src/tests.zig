@@ -60,7 +60,7 @@ fn encodeDecodeCycle(
 
 test "encode and decode cycles with all possible shard combinations" {
     const allocator = std.testing.allocator;
-    const count = 4;
+    const count = 5;
     const SHARD_BYTES = 64;
 
     var input: [SHARD_BYTES * count]u8 = undefined;
