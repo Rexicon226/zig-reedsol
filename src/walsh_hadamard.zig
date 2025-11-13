@@ -21,7 +21,7 @@ pub fn fwht(data: *[gf.order]u16, m: u64) void {
         var r: u64 = 0;
         while (r < m) : (r += stride) {
             for (r..r + dist) |offset| {
-                fwht4(data, @truncate(offset), @truncate(dist));
+                fwht4(data, offset & 0xFFFF, dist & 0xFFFF);
             }
         }
         dist = stride;
