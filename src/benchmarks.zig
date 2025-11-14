@@ -8,7 +8,7 @@ pub fn main() !void {
     try roundtrip(allocator);
 }
 
-const SHARD_BYTES = 1024;
+const SHARD_BYTES = 1_024;
 const ITERATIONS = 10_000;
 
 fn roundtrip(gpa: std.mem.Allocator) !void {
@@ -24,7 +24,7 @@ fn roundtrip(gpa: std.mem.Allocator) !void {
 
     inline for ([_]struct { u32, u32 }{
         .{ 32, 32 },
-        .{ 64, 64 },
+        // .{ 64, 64 },
     }) |entry| {
         const original_count, const recovery_count = entry;
 
@@ -41,6 +41,8 @@ fn roundtrip(gpa: std.mem.Allocator) !void {
             const node = progress.start(name, ITERATIONS);
             defer node.end();
 
+            var parity_shards: [recovery_count][SHARD_BYTES]u8 = undefined;
+
             var total_ns: u64 = 0;
 
             for (0..ITERATIONS) |i| {
@@ -50,8 +52,11 @@ fn roundtrip(gpa: std.mem.Allocator) !void {
                 var encoder = try reedsol.Encoder.init(arena, original_count, recovery_count, SHARD_BYTES);
                 defer encoder.deinit(arena);
 
+                for (original, &parity_shards) |o, *p| {
+                    std.mem.doNotOptimizeAway(try encoder.addDataShard(o));
+                    std.mem.doNotOptimizeAway(try encoder.addParityShard(p));
+                }
                 var start = try std.time.Timer.start();
-                for (original) |o| std.mem.doNotOptimizeAway(try encoder.addOriginalShard(o));
                 std.mem.doNotOptimizeAway(try encoder.encode());
                 total_ns += start.read();
             }

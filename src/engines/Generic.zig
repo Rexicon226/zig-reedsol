@@ -6,33 +6,32 @@ const tables = @import("tables");
 
 const walsh_hadamard = @import("../walsh_hadamard.zig");
 
-const root = @import("../root.zig");
+const Shards = @import("../root.zig").Shards;
 const gf = @import("../gf.zig");
 const utils = @import("../utilities.zig");
 
 const V = @Vector(32, u8);
 
-pub fn fft(a: anytype, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
-    const shards: *const root.Shards = &a.shards;
-
-    var distance = size >> 2;
-    var distance_4 = size;
-    while (distance != 0) {
+/// In-place radix-4 FFT.
+pub fn fft(shards: *const Shards, start_index: u64, size: u64, work_limit: u64, skew_delta: u64) void {
+    var stride = size >> 2;
+    var group_stride = size;
+    while (stride != 0) {
         var r: u64 = 0;
-        while (r < truncated_size) : (r += distance_4) {
-            const base = r + distance + skew_delta - 1;
+        while (r < work_limit) : (r += group_stride) {
+            const base = r + stride + skew_delta - 1;
 
-            const log_m01 = tables.skew[base + distance * 0];
-            const log_m02 = tables.skew[base + distance * 1];
-            const log_m23 = tables.skew[base + distance * 2];
+            const log_m01 = tables.skew[base + stride * 0];
+            const log_m02 = tables.skew[base + stride * 1];
+            const log_m23 = tables.skew[base + stride * 2];
 
-            for (r..r + distance) |i| {
-                const position = pos + i;
+            for (r..r + stride) |i| {
+                const position = start_index + i;
 
-                const s0 = shards.data[(position + distance * 0) * shards.shard_length ..][0..shards.shard_length];
-                const s1 = shards.data[(position + distance * 1) * shards.shard_length ..][0..shards.shard_length];
-                const s2 = shards.data[(position + distance * 2) * shards.shard_length ..][0..shards.shard_length];
-                const s3 = shards.data[(position + distance * 3) * shards.shard_length ..][0..shards.shard_length];
+                const s0 = shards.data[(position + stride * 0) * shards.shard_length ..][0..shards.shard_length];
+                const s1 = shards.data[(position + stride * 1) * shards.shard_length ..][0..shards.shard_length];
+                const s2 = shards.data[(position + stride * 2) * shards.shard_length ..][0..shards.shard_length];
+                const s3 = shards.data[(position + stride * 3) * shards.shard_length ..][0..shards.shard_length];
 
                 // first layer
                 if (log_m02 == gf.modulus) {
@@ -57,16 +56,16 @@ pub fn fft(a: anytype, pos: u64, size: u64, truncated_size: u64, skew_delta: u64
                 }
             }
         }
-        distance_4 = distance;
-        distance >>= 2;
+        group_stride = stride;
+        stride >>= 2;
     }
 
-    if (distance_4 == 2) {
+    if (group_stride == 2) {
         var r: usize = 0;
-        while (r < truncated_size) : (r += 2) {
+        while (r < work_limit) : (r += 2) {
             const log_m = tables.skew[r + skew_delta];
-            const s0 = shards.data[(pos + r) * shards.shard_length ..][0..shards.shard_length];
-            const s1 = shards.data[(pos + r + 1) * shards.shard_length ..][0..shards.shard_length];
+            const s0 = shards.data[(start_index + r + 0) * shards.shard_length ..][0..shards.shard_length];
+            const s1 = shards.data[(start_index + r + 1) * shards.shard_length ..][0..shards.shard_length];
 
             if (log_m == gf.modulus) {
                 utils.xor(s1, s0);
@@ -77,27 +76,33 @@ pub fn fft(a: anytype, pos: u64, size: u64, truncated_size: u64, skew_delta: u64
     }
 }
 
-pub fn ifft(a: anytype, pos: u64, size: u64, truncated_size: u64, skew_delta: u64) void {
-    const shards: *const root.Shards = &a.shards;
+pub fn ifft(
+    data: []const []u8,
+    start_index: u64,
+    size: u64,
+    work_limit: u64,
+    skew_delta: u64,
+) void {
+    const shard_length = data[0].len;
 
-    var distance: u64 = 1;
-    var distance_4: u64 = 4;
-    while (distance_4 <= size) {
+    var stride: u64 = 1;
+    var group_stride: u64 = 4;
+    while (group_stride <= size) {
         var r: u64 = 0;
-        while (r < truncated_size) : (r += distance_4) {
-            const base = r + distance + skew_delta - 1;
+        while (r < work_limit) : (r += group_stride) {
+            const base = r + stride + skew_delta - 1;
 
-            const log_m01 = tables.skew[base + distance * 0];
-            const log_m02 = tables.skew[base + distance * 1];
-            const log_m23 = tables.skew[base + distance * 2];
+            const log_m01 = tables.skew[base + stride * 0];
+            const log_m02 = tables.skew[base + stride * 1];
+            const log_m23 = tables.skew[base + stride * 2];
 
-            for (r..r + distance) |i| {
-                const position = pos + i;
+            for (r..r + stride) |i| {
+                const position = start_index + i;
 
-                const s0 = shards.data[(position + distance * 0) * shards.shard_length ..][0..shards.shard_length];
-                const s1 = shards.data[(position + distance * 1) * shards.shard_length ..][0..shards.shard_length];
-                const s2 = shards.data[(position + distance * 2) * shards.shard_length ..][0..shards.shard_length];
-                const s3 = shards.data[(position + distance * 3) * shards.shard_length ..][0..shards.shard_length];
+                const s0 = data[(position + stride * 0) * shard_length ..][0..shard_length];
+                const s1 = data[(position + stride * 1) * shard_length ..][0..shard_length];
+                const s2 = data[(position + stride * 2) * shard_length ..][0..shard_length];
+                const s3 = data[(position + stride * 3) * shard_length ..][0..shard_length];
 
                 // first layer
                 if (log_m01 == gf.modulus) {
@@ -122,28 +127,28 @@ pub fn ifft(a: anytype, pos: u64, size: u64, truncated_size: u64, skew_delta: u6
                 }
             }
         }
-        distance = distance_4;
-        distance_4 <<= 2;
+        stride = group_stride;
+        group_stride <<= 2;
     }
 
     // final odd layer
 
-    if (distance < size) {
-        const log_m = tables.skew[distance + skew_delta - 1];
+    // if (stride < size) {
+    //     const log_m = tables.skew[stride + skew_delta - 1];
+    //     const index = (start_index + stride) * shards.shard_length;
 
-        if (log_m == gf.modulus) {
-            const s0 = shards.data[(pos + distance) * shards.shard_length ..][0..distance];
-            const s1 = shards.data[pos * shards.shard_length ..][0..distance];
-            utils.xor(s0, s1);
-        } else {
-            for (0..distance) |i| {
-                // TODO simplify this slicing
-                const s0 = shards.data[0 .. (pos + distance) * shards.shard_length][(pos + i) * shards.shard_length ..][0..shards.shard_length];
-                const s1 = shards.data[(pos + distance) * shards.shard_length ..][i * shards.shard_length ..][0..shards.shard_length];
-                ifftPartial(s0, s1, log_m);
-            }
-        }
-    }
+    //     if (log_m == gf.modulus) {
+    //         const s0 = shards.data[index..][0..stride];
+    //         const s1 = shards.data[start_index * shards.shard_length ..][0..stride];
+    //         utils.xor(s0, s1);
+    //     } else {
+    //         for (0..stride) |i| {
+    //             const s0 = shards.data[0..index][(start_index + i) * shards.shard_length ..];
+    //             const s1 = shards.data[index..][i * shards.shard_length ..];
+    //             ifftPartial(s0[0..shards.shard_length], s1[0..shards.shard_length], log_m);
+    //         }
+    //     }
+    // }
 }
 
 fn fftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {

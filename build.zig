@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const use_llvm = b.option(bool, "use-llvm", "Compile library and tests with LLVM backend");
+    const use_llvm = b.option(bool, "use-llvm", "Compile library and tests with LLVM backend") orelse true;
 
     const tables_exe = b.addExecutable(.{
         .root_module = b.createModule(.{
@@ -37,11 +37,12 @@ pub fn build(b: *std.Build) void {
         }),
         .use_llvm = use_llvm,
     });
+    b.installArtifact(benchmark_exe);
     benchmark_step.dependOn(&b.addRunArtifact(benchmark_exe).step);
 
     const test_step = b.step("test", "Run tests");
     inline for (.{
-        .{ "encode", "src/tests.zig" },
+        .{ "encode", "tests/tests.zig" },
         .{ "engine", "src/root.zig" },
     }) |entry| {
         const name, const path = entry;
