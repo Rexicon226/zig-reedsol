@@ -76,11 +76,11 @@ pub fn main() !void {
             }
         }
 
-        temp[m] = gf.modulus - log[utils.mul16(temp[m], log[temp[m] ^ 1], &exp, &log)];
+        temp[m] = gf.modulus - log[mul16(temp[m], log[temp[m] ^ 1], &exp, &log)];
 
         for (m + 1..15) |i| {
-            const sum = utils.addMod(log[temp[i] ^ 1], temp[m]);
-            temp[i] = utils.mul16(temp[i], sum, &exp, &log);
+            const sum = addMod(log[temp[i] ^ 1], temp[m]);
+            temp[i] = mul16(temp[i], sum, &exp, &log);
         }
     }
 
@@ -103,7 +103,7 @@ pub fn main() !void {
             var prod_lo: [16]u8 = @splat(0);
             var prod_hi: [16]u8 = @splat(0);
             for (0..16) |j| {
-                const prod = utils.mul16(
+                const prod = mul16(
                     @intCast(j << (@as(u6, @intCast(i)) * 4)),
                     @intCast(log_m),
                     &exp,
@@ -150,4 +150,15 @@ pub fn main() !void {
     try stdout.writeAll(
         \\ };
     );
+}
+
+/// multiplies x by an element who's log is log_m in GF, mod 2^16 - 1
+pub fn mul16(x: u16, log_m: u16, exp: *const [gf.order]u16, log: *const [gf.order]u16) u16 {
+    if (x == 0) return 0;
+    return exp[addMod(log[x], log_m)];
+}
+
+pub fn addMod(x: u32, y: u32) u16 {
+    const sum = x + y;
+    return @truncate(sum + (sum >> 16));
 }

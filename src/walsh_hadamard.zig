@@ -57,6 +57,11 @@ fn fwht4(data: *[gf.order]u16, offset: u16, stride: u16) void {
 /// Each butterfly computes the field sum and difference of two points.
 inline fn fwht2(a: u16, b: u16) struct { u16, u16 } {
     const sum = utils.addMod(a, b);
-    const dif = utils.subMod(a, b);
+    const dif = subMod(a, b);
     return .{ sum, dif };
+}
+
+pub fn subMod(x: u32, y: u32) u16 {
+    const dif = x + gf.modulus - y;
+    return @truncate(dif + (dif >> 16));
 }

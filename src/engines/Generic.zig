@@ -1,4 +1,4 @@
-//! An engine that implements the fft and ifft using generic `@Vector`s.
+//! An engine that implements Reed-Solomon encoding using generic `@Vector`s.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -6,14 +6,39 @@ const tables = @import("tables");
 
 const walsh_hadamard = @import("../walsh_hadamard.zig");
 
-const Shards = @import("../root.zig").Shards;
 const gf = @import("../gf.zig");
 const utils = @import("../utilities.zig");
 
 const V = @Vector(32, u8);
 
+pub fn encode(
+    data: []const []const u8,
+    parity: []const []u8,
+    shard_bytes: u64,
+) void {
+    for (0..parity.len) |i| @memcpy(parity[i], data[i]);
+
+    const chunk_size = parity.len;
+
+    // first chunk
+    ifft(parity, 0, chunk_size, chunk_size, chunk_size);
+
+    if (data.len > chunk_size) {
+        // full chunks
+        var chunk_start = chunk_size;
+        while (chunk_start + chunk_size < data.len) : (chunk_start += chunk_size) {
+            ifft(parity, chunk_start, chunk_size, chunk_size, chunk_start + chunk_size);
+            const s0 = parity[0..chunk_size];
+            const s1 = parity[chunk_start * shard_bytes ..][0..chunk_size];
+            utils.xor(s0, s1);
+        }
+    }
+
+    fft(parity, 0, chunk_size, parity.len, 0);
+}
+
 /// In-place radix-4 FFT.
-pub fn fft(shards: *const Shards, start_index: u64, size: u64, work_limit: u64, skew_delta: u64) void {
+pub fn fft(data: []const []u8, start_index: u64, size: u64, work_limit: u64, skew_delta: u64) void {
     var stride = size >> 2;
     var group_stride = size;
     while (stride != 0) {
@@ -28,10 +53,10 @@ pub fn fft(shards: *const Shards, start_index: u64, size: u64, work_limit: u64, 
             for (r..r + stride) |i| {
                 const position = start_index + i;
 
-                const s0 = shards.data[(position + stride * 0) * shards.shard_length ..][0..shards.shard_length];
-                const s1 = shards.data[(position + stride * 1) * shards.shard_length ..][0..shards.shard_length];
-                const s2 = shards.data[(position + stride * 2) * shards.shard_length ..][0..shards.shard_length];
-                const s3 = shards.data[(position + stride * 3) * shards.shard_length ..][0..shards.shard_length];
+                const s0 = data[(position + stride * 0)..][0..1];
+                const s1 = data[(position + stride * 1)..][0..1];
+                const s2 = data[(position + stride * 2)..][0..1];
+                const s3 = data[(position + stride * 3)..][0..1];
 
                 // first layer
                 if (log_m02 == gf.modulus) {
@@ -64,8 +89,8 @@ pub fn fft(shards: *const Shards, start_index: u64, size: u64, work_limit: u64, 
         var r: usize = 0;
         while (r < work_limit) : (r += 2) {
             const log_m = tables.skew[r + skew_delta];
-            const s0 = shards.data[(start_index + r + 0) * shards.shard_length ..][0..shards.shard_length];
-            const s1 = shards.data[(start_index + r + 1) * shards.shard_length ..][0..shards.shard_length];
+            const s0 = data[(start_index + r + 0)..][0..1];
+            const s1 = data[(start_index + r + 1)..][0..1];
 
             if (log_m == gf.modulus) {
                 utils.xor(s1, s0);
@@ -83,8 +108,6 @@ pub fn ifft(
     work_limit: u64,
     skew_delta: u64,
 ) void {
-    const shard_length = data[0].len;
-
     var stride: u64 = 1;
     var group_stride: u64 = 4;
     while (group_stride <= size) {
@@ -99,10 +122,10 @@ pub fn ifft(
             for (r..r + stride) |i| {
                 const position = start_index + i;
 
-                const s0 = data[(position + stride * 0) * shard_length ..][0..shard_length];
-                const s1 = data[(position + stride * 1) * shard_length ..][0..shard_length];
-                const s2 = data[(position + stride * 2) * shard_length ..][0..shard_length];
-                const s3 = data[(position + stride * 3) * shard_length ..][0..shard_length];
+                const s0 = data[(position + stride * 0)..][0..1];
+                const s1 = data[(position + stride * 1)..][0..1];
+                const s2 = data[(position + stride * 2)..][0..1];
+                const s3 = data[(position + stride * 3)..][0..1];
 
                 // first layer
                 if (log_m01 == gf.modulus) {
@@ -133,27 +156,27 @@ pub fn ifft(
 
     // final odd layer
 
-    // if (stride < size) {
-    //     const log_m = tables.skew[stride + skew_delta - 1];
-    //     const index = (start_index + stride) * shards.shard_length;
+    if (stride < size) {
+        const log_m = tables.skew[stride + skew_delta - 1];
+        const index = (start_index + stride);
 
-    //     if (log_m == gf.modulus) {
-    //         const s0 = shards.data[index..][0..stride];
-    //         const s1 = shards.data[start_index * shards.shard_length ..][0..stride];
-    //         utils.xor(s0, s1);
-    //     } else {
-    //         for (0..stride) |i| {
-    //             const s0 = shards.data[0..index][(start_index + i) * shards.shard_length ..];
-    //             const s1 = shards.data[index..][i * shards.shard_length ..];
-    //             ifftPartial(s0[0..shards.shard_length], s1[0..shards.shard_length], log_m);
-    //         }
-    //     }
-    // }
+        if (log_m == gf.modulus) {
+            const s0 = data[index..][0..stride];
+            const s1 = data[start_index..][0..stride];
+            utils.xor(s0, s1);
+        } else {
+            for (0..stride) |i| {
+                const s0 = data[0..index][(start_index + i)..];
+                const s1 = data[index..][i..];
+                ifftPartial(s0[0..1], s1[0..1], log_m);
+            }
+        }
+    }
 }
 
-fn fftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+fn fftPartial(x: []const []u8, y: []const []u8, log_m: u16) void {
     const lut: Lut = .init(&tables.mul_128[log_m]);
-    for (x, y) |*a, *b| {
+    for (x, y) |a, b| {
         var x_lo: V = @bitCast(a[0..32].*);
         var x_hi: V = @bitCast(a[32..64].*);
 
@@ -173,10 +196,10 @@ fn fftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
     }
 }
 
-fn ifftPartial(x: [][64]u8, y: [][64]u8, log_m: u16) void {
+fn ifftPartial(x: []const []u8, y: []const []u8, log_m: u16) void {
     const lut: Lut = .init(&tables.mul_128[log_m]);
 
-    for (x, y) |*a, *b| {
+    for (x, y) |a, b| {
         var x_lo: V = @bitCast(a[0..32].*);
         var x_hi: V = @bitCast(a[32..64].*);
 

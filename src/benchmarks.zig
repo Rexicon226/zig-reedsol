@@ -42,6 +42,8 @@ fn roundtrip(gpa: std.mem.Allocator) !void {
             defer node.end();
 
             var parity_shards: [recovery_count][SHARD_BYTES]u8 = undefined;
+            var parity_slices: [recovery_count][]u8 = undefined;
+            for (&parity_slices, &parity_shards) |*s, *a| s.* = a;
 
             var total_ns: u64 = 0;
 
@@ -49,15 +51,8 @@ fn roundtrip(gpa: std.mem.Allocator) !void {
                 defer node.completeOne();
                 std.mem.doNotOptimizeAway(i);
 
-                var encoder = try reedsol.Encoder.init(arena, original_count, recovery_count, SHARD_BYTES);
-                defer encoder.deinit(arena);
-
-                for (original, &parity_shards) |o, *p| {
-                    std.mem.doNotOptimizeAway(try encoder.addDataShard(o));
-                    std.mem.doNotOptimizeAway(try encoder.addParityShard(p));
-                }
                 var start = try std.time.Timer.start();
-                std.mem.doNotOptimizeAway(try encoder.encode());
+                std.mem.doNotOptimizeAway(reedsol.encode(&original, &parity_slices, SHARD_BYTES));
                 total_ns += start.read();
             }
 
@@ -65,13 +60,5 @@ fn roundtrip(gpa: std.mem.Allocator) !void {
             try stdout.print("{s} - average of {d}us per encode\n", .{ name, @floor(average) / std.time.ns_per_us });
             try stdout.flush();
         }
-
-        // const recovery = try reedsol.encode(
-        //     arena,
-        //     original_count,
-        //     recovery_count,
-        //     &original,
-        // );
-        // defer arena.free(recovery);
     }
 }

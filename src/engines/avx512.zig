@@ -4,12 +4,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const Shards = @import("../root.zig").Shards;
-
 const V = @Vector(32, u8);
 
-pub fn encode(shred_size: u64, data: []const []const u8, parity: []const []u8) void {
-    std.debug.assert(shred_size >= 32);
+pub fn encode(
+    data: []const []const u8,
+    parity: []const []u8,
+    shard_bytes: u64,
+) void {
+    std.debug.assert(shard_bytes >= 32);
     std.debug.assert(data.len == 32);
     std.debug.assert(parity.len == 32);
 
@@ -173,8 +175,8 @@ pub fn encode(shred_size: u64, data: []const []const u8, parity: []const []u8) v
         }
 
         count += 32;
-        if (count == 1024) break;
-        count = @min(count, shred_size - 32);
+        if (count == shard_bytes) break;
+        count = @min(count, shard_bytes - 32);
     }
 }
 
